@@ -8,10 +8,13 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/aybabtme/rgbterm"
 )
+
+var reErr = regexp.MustCompile(`choose one of: \[(.*)\]`)
 
 func string2color(in string) (r, g, b uint8) {
 	md := md5.Sum([]byte(in))
@@ -32,7 +35,13 @@ func getPos(namespace string) []string {
 func main() {
 	namespace := os.Args[1]
 	pos := getPos(namespace)
-	for _, pod := range pos {
+	posCh := make(chan string)
+	go func() {
+		for _, p := range pos {
+			posCh <- p
+		}
+	}()
+	for pod := range posCh {
 		go func(pod string) {
 			cmd := fmt.Sprintf("kubectl -n %s logs -f %s", namespace, pod)
 			c := exec.Command("/bin/sh", "-c", cmd)
@@ -48,15 +57,14 @@ func main() {
 			}
 			r, g, b := string2color(pod)
 			prefix := rgbterm.FgString(fmt.Sprintf("%v:", pod), r, g, b)
-			go reader(po, prefix)
-			go reader(pe, prefix)
+			go reader(po, prefix, pod, posCh)
+			go reader(pe, prefix, pod, posCh)
 			c.Start()
 		}(pod)
 	}
-	select {}
 }
 
-func reader(rd io.Reader, prefix string) {
+func reader(rd io.Reader, prefix, pod string, ch chan string) {
 	reader := bufio.NewReader(rd)
 	for {
 		l, err := reader.ReadString('\n')
@@ -67,6 +75,13 @@ func reader(rd io.Reader, prefix string) {
 			break
 		}
 		l = strings.TrimRight(l, "\n")
+		if reErr.MatchString(l) {
+			p := reErr.FindStringSubmatch(l)[1]
+			po := strings.Fields(p)
+			for _, v := range po {
+				ch <- pod + " " + v
+			}
+		}
 		fmt.Println(prefix, l)
 
 	}
